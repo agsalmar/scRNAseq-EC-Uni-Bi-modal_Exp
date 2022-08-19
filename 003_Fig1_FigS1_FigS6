@@ -1,0 +1,166 @@
+# Assign Cell-Cycle Scores to integrated data
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+Flow_All.combined <- CellCycleScoring(Flow_All.combined, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+# Plot Fig 1 B
+Shear_col <- c(RColorBrewer::brewer.pal(11, "RdBu")[2],RColorBrewer::brewer.pal(11, "RdBu")[10])
+DimPlot(Flow_All.combined, reduction = "umap", group.by = "Shear", order = c("Physio","Alt"),
+        pt.size = 1, cols = Shear_col)+coord_equal()+no_x_text()+no_y_text()+labs(x='UMAP 1', y='UMAP 2') +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle("Human Aortic Endothelial Cells (n=5,994)\nColoured by Shear Condition")+
+  theme(plot.title = element_text(size = 12, hjust = 0))+
+  theme(legend.position = c(0.72, 0.12),axis.title=element_text(size=12),
+        legend.text = element_text(size = 12), axis.ticks = element_blank())+theme(aspect.ratio=1)
+ggsave(file.path('900_FinalFigs', 'Fig1_shear_UMAP.pdf'), device='pdf', units='in', width=7, height=7, scale=0.8)
+
+# Plot Fig S 1 a
+SampleID_col <- brewer.pal(3,"Accent")
+DimPlot(Flow_All.combined, reduction = "umap", group.by = "SampleID", order = c("Sample3","Sample2","Sample1"),
+        pt.size = 1, cols = SampleID_col)+coord_equal()+no_x_text()+no_y_text()+labs(x='UMAP 1', y='UMAP 2') +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle("Human Aortic Endothelial Cells (n=5,994)\nColoured by Sample ID")+
+  theme(plot.title = element_text(size = 12, hjust = 0))+
+  theme(legend.position = c(0.72, 0.12),axis.title=element_text(size=12),
+        legend.text = element_text(size = 12), axis.ticks = element_blank())+theme(aspect.ratio=1)
+ggsave(file.path('950_SuppFigs', 'Fig1_SampleID_UMAP.pdf'), device='pdf', units='in', width=7, height=7, scale=0.8)
+
+# Plot Fig S 1 b
+Phase_col <- brewer.pal(3,"Paired")
+DimPlot(Flow_All.combined, reduction = "umap", group.by = "Phase",
+        pt.size = 1, cols = Phase_col)+coord_equal()+no_x_text()+no_y_text()+labs(x='UMAP 1', y='UMAP 2') +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle("Human Aortic Endothelial Cells (n=5,994)\nColoured by Cell Cycle")+
+  theme(plot.title = element_text(size = 12, hjust = 0))+
+  theme(legend.position = c(0.72, 0.12),axis.title=element_text(size=12),
+        legend.text = element_text(size = 12), axis.ticks = element_blank())+theme(aspect.ratio=1)
+ggsave(file.path('950_SuppFigs', 'Fig1_Phase_UMAP.pdf'), device='pdf', units='in', width=7, height=7, scale=0.8)
+
+# Plot Fig S 6
+pm = VlnPlot(Flow_All.combined, features="percent.mt", group.by="Shear",pt.size = 0,cols = c(Shear_col[2],Shear_col[1]), sort = 'decreasing') +
+  geom_boxplot(width=0.2, outlier.shape=NA) +
+  no_legend() +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  no_axes_titles() + 
+  theme(plot.title = element_text(size = 12, hjust = 0))+
+  ggtitle("Mitochondrial Percent") +
+  theme(legend.position = 'none')
+
+ribo.genes = grep("^RP[LS]",rownames(Flow_All.combined@assays[["RNA"]]@counts),value=T)
+cs = Matrix::colSums #BiocGenerics version of colSums doesn't work on sparse matrices
+percent.ribo = cs(Flow_All.combined@assays[["RNA"]]@counts[ribo.genes,])/cs(Flow_All.combined@assays[["RNA"]]@counts)*100
+Flow_All.combined = AddMetaData(Flow_All.combined,percent.ribo,"percent.ribo")
+
+pr = VlnPlot(Flow_All.combined, features="percent.ribo", group.by="Shear",pt.size = 0,cols = c(Shear_col[2],Shear_col[1]), sort = 'decreasing') +
+  geom_boxplot(width=0.2, outlier.shape=NA) +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  no_axes_titles() + 
+  theme(plot.title = element_text(size = 12, hjust = 0))+ 
+  ggtitle("Ribosomal Percent") +
+  theme(legend.position = 'none')
+plot_grid(pm, pr, ncol=2)
+ggsave(file.path('950_SuppFigs', 'Fig6.pdf'), device='pdf', units='in', width=10, height=7, scale=0.8)
+
+# Plot Fig 1 d
+features_to_plot <- c("THBS1", "VWF", "ESM1", "PI16", "ADAMTS1", "IGFBP5","TFPI2","LYVE1")
+Features_col <- brewer.pal(6,"YlGnBu")
+max_cutoff = 6
+
+featureplot1<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[1],
+        pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[1])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot2<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[2],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[2])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot3<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[3],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[3])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot4<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[4],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[4])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot5<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[5],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[5])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot6<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[6],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[6])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot8<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[7],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[7])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot9<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[8],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  no_x_text()+no_y_text()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle(features_to_plot[8])+
+  theme(plot.title = element_text(size = 12, hjust = 0),axis.title.x=element_blank(),axis.title.y=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank())+
+  theme(legend.position = "none")+
+  theme(aspect.ratio=1)+theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+
+featureplot7<-FeaturePlot(Flow_All.combined, reduction = "umap", features=features_to_plot[6],
+                          pt.size = 1,cols = Features_col, min.cutoff = 0, max.cutoff = max_cutoff)+coord_equal()+
+  theme(legend.position="bottom")+labs(color ="Gene Expression Level")
+legend <- cowplot::get_legend(featureplot7)
+
+plot_grid(featureplot4,
+          featureplot5,featureplot6,featureplot9, 
+          featureplot1, featureplot2,featureplot3,featureplot8,
+          NULL, legend, NULL, ncol=4, rel_heights = c(1, 1, 0.2))+theme(aspect.ratio=0.6)
+ggsave(file.path('900_FinalFigs', 'Fig1_features_UMAP.pdf'), device='pdf', units='in', width=10, height=6, scale=1)
