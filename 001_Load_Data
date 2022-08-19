@@ -1,0 +1,88 @@
+# LOAD gene expression vs cell matrix example
+# You must modify this script based on your directory
+# and the names of your raw files.
+
+# file.path will change based in how you strcuture the data. 
+# for example, in the first case, gene expression vs cell matrix 
+# for unimodal experiments was saved as raw_flow_data.txt in 
+# a 'data' folder within the same directory that stores this R script.
+
+# For 2018-2019 data, you can load data as:
+
+ND_1_raw = read.table(file.path('data','raw_flow_data.txt'),
+                      sep=",",
+                      header=T,
+                      row.names=1)
+ND_1_raw = ND_1_raw %>% data.matrix() %>% Matrix(sparse=T)
+Flow_S1 = CreateSeuratObject(counts=ND_1_raw, min.cells=10, min.genes=500,
+                          names.field=2, names.delim="_",project="Flow_S1")
+rm(ND_1_raw)
+
+RA_raw = read.table(file.path('data','raw_rapa_data.txt'),
+                    sep=",",
+                    header=T,
+                    row.names=1)
+RA_raw = RA_raw %>% data.matrix() %>% Matrix(sparse=T)
+Flow_S2 = CreateSeuratObject(counts=RA_raw, min.cells=10, min.genes=500,
+                        names.field=2, names.delim="_",project="Flow_S2")
+Idents(Flow_S2) <- Flow_S2@meta.data$orig.ident
+Flow_S2 <- subset(Flow_S2,idents = c("B","H"))  # Select only cells without drug
+rm(RA_raw)
+
+# For 2021-2022 data, you can load data as:
+
+H_ND_2_raw <- Read10X(data.dir = paste(getwd(),"/data/H_ND/",sep=''))
+colnames(H_ND_2_raw)<-paste('H_ND_2_',colnames(H_ND_2_raw),sep='')
+H_ND_2 = CreateSeuratObject(counts=H_ND_2_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_")
+rm(H_ND_2_raw)
+
+L_ND_2_raw <- Read10X(data.dir = paste(getwd(),"/data/L_ND/",sep=''))
+colnames(L_ND_2_raw)<-paste('L_ND_2_',colnames(L_ND_2_raw),sep='')
+L_ND_2 = CreateSeuratObject(counts=L_ND_2_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_")
+rm(L_ND_2_raw)
+
+# To merge data sets in one seurat object
+
+Flow_S3 <- merge(H_ND_2, y = L_ND_2, project = "Flow_S3")
+rm(H_ND_2)
+rm(L_ND_2)
+
+# For more information about how to load raw data:
+# https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+# https://satijalab.org/seurat/articles/merge_vignette.html
+
+# Add additional metadata
+# A: 2018, H, ND (HiB, HiD)
+# B: 2018, L, ND (LoD, LoF)
+# C: 2019, H, RA (A)
+# D: 2019, L, RA (E)
+# E: 2019, H, ND (B)
+# F: 2019, L, ND (H)
+# G: 2021, H, ND
+# H: 2021, L, ND
+# I: 2021, H, PA
+# J: 2021, L, PA
+Flow_S1@meta.data$Exp<-ifelse(grepl("Hi", Flow_S1@assays[["RNA"]]@counts@Dimnames[[2]]),'A','B')
+Flow_S1@meta.data$SampleID<-'Sample1'
+Flow_S2@meta.data$Exp<-ifelse(grepl("_B", Flow_S2@assays[["RNA"]]@counts@Dimnames[[2]]),'E','F')
+Flow_S2@meta.data$SampleID<-'Sample2'
+Flow_S3@meta.data$Exp<-ifelse(grepl("H_ND", Flow_S3@assays[["RNA"]]@counts@Dimnames[[2]]),'G','H')
+Flow_S3@meta.data$SampleID<-'Sample3'
+Idents(Flow_S1)<-Flow_S1@meta.data$Exp
+Idents(Flow_S2)<-Flow_S2@meta.data$Exp
+Idents(Flow_S3)<-Flow_S3@meta.data$Exp
+Flow_S1@meta.data$Shear<-ifelse(Flow_S1@meta.data[["Exp"]]=='A', "Physio", "Alt")
+Flow_S2@meta.data$Shear<-ifelse(Flow_S2@meta.data[["Exp"]]=='E', "Physio", "Alt")
+Flow_S3@meta.data$Shear<-ifelse(Flow_S3@meta.data[["Exp"]]=='G', "Physio", "Alt")
+
+# QC
+Flow_S1[["percent.mt"]] <- PercentageFeatureSet(Flow_S1, pattern = "^MT-")
+Flow_S2[["percent.mt"]] <- PercentageFeatureSet(Flow_S2, pattern = "^MT-")
+Flow_S3[["percent.mt"]] <- PercentageFeatureSet(Flow_S3, pattern = "^MT-")
+
+# Filter data
+Flow_S1 <- subset(Flow_S1, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
+Flow_S2 <- subset(Flow_S2, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
+Flow_S3 <- subset(Flow_S3, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
