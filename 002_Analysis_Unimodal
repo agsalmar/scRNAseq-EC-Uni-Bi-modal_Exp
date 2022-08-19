@@ -1,0 +1,123 @@
+# Unimodal experiments (n = 3) were integrated as explained in:
+# https://satijalab.org/seurat/articles/integration_introduction.html
+
+# This is a modified version described in the link above:
+
+# Flow_All is a Seurat object with all the unimodal data merged.
+
+Flow_All.list <- SplitObject(Flow_All, split.by = "SampleID")
+Flow_All.list <- lapply(X = Flow_All.list, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+Flow_All.anchors <- FindIntegrationAnchors(object.list = Flow_All.list, 
+                                         anchor.features = SelectIntegrationFeatures(object.list = Flow_All.list))
+Flow_All.combined <- IntegrateData(anchorset = Flow_All.anchors)
+DefaultAssay(Flow_All.combined) <- "integrated"
+Flow_All.combined <- ScaleData(Flow_All.combined, verbose = FALSE)
+Flow_All.combined <- RunPCA(Flow_All.combined, npcs = 30, verbose = FALSE)
+Flow_All.combined <- RunUMAP(Flow_All.combined, reduction = "pca", dims = 1:30)
+Flow_All.combined <- RunTSNE(Flow_All.combined, reduction = "pca", dims = 1:30)
+
+
+# De was performed as in http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+# The following code is a modified version
+
+# DE of identified clusters with Deseq
+DefaultAssay(Flow_All.combined) <- "RNA"
+cells_shear <- Flow_All.combined@meta.data["Shear"]
+genes_cells_counts <- as.data.frame(GetAssayData(object = Flow_All.combined, slot = "counts"))
+
+dds <- DESeqDataSetFromMatrix(countData = genes_cells_counts ,
+                                     colData = cells_shear,
+                                     design = ~ Shear)
+
+dds <- DESeq(dds, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)  # Takes a long time!!!!!
+res <- results(dds, contrast=c("Shear","Physio","Alt"))
+res$SYMBOL <- rownames(res)
+res2 <- as.data.frame(res[c("SYMBOL", "stat")])
+ranks_shear <- deframe(res2)
+
+pathways.hallmark <- gmtPathways("data\\c2-cp.c5.v6.2.symbols.gmt")
+#pathways.hallmark_filt <- pathways.hallmark[grep("ENDOTHELIAL|AORTA|ARTERIAL|ECM|EXTRACELLULAR|BINDING|VASCULATURE|BASEMENT|MEMBRANE|MATRIX|VESSEL|ANGIOGENESIS|JUNCTION|WOUND|HEART|PROLIFERATION|MIGRATION|DIFFERENTIATION",names(pathways.hallmark))]
+#pathways.hallmark_filt <- pathways.hallmark[grep("ENDOT",names(pathways.hallmark))]
+
+
+fgseaRes_shear <- fgsea(pathways=pathways.hallmark, stats=ranks_shear, nperm=100000)
+fgseaResTidy_shear <- fgseaRes_shear %>% as_tibble() %>% arrange(desc(NES))
+fgseaResTidy_shear <- fgseaResTidy_shear %>% filter(padj <0.05)
+fgseaResTidy_shear %>% dplyr::select(-leadingEdge, -ES, -nMoreExtreme) %>% arrange(padj) %>% DT::datatable()
+fgseaResTidy_toplot_shear <- unique(rbind(head(fgseaResTidy_shear,10),tail(fgseaResTidy_shear,10)))
+
+# Selected by user
+fgseaResTidy_toplot_shear_2 <- rbind(fgseaResTidy_shear[1:5,],
+                                     fgseaResTidy_shear[7:9,],
+                                     fgseaResTidy_shear[11,],
+                                     fgseaResTidy_shear[13,],
+                                     fgseaResTidy_shear[720,],
+                                     fgseaResTidy_shear[730:731,],
+                                     fgseaResTidy_shear[737:738,],
+                                     fgseaResTidy_shear[740,],
+                                     fgseaResTidy_shear[744,],
+                                     fgseaResTidy_shear[746:747,],
+                                     fgseaResTidy_shear[749,])
+                                     
+# TF activity, based on https://saezlab.github.io/dorothea/articles/single_cell_vignette.html
+# This code is a modified version
+
+dorothea_regulon_human <- get(data("dorothea_hs", package = "dorothea"))
+
+regulon <- dorothea_regulon_human %>%
+  dplyr::filter(confidence %in% c("A","B","C"))
+
+## Compute Viper Scores 
+Flow_All.combined <- run_viper(Flow_All.combined, regulon,
+                  options = list(method = "scale", minsize = 4, 
+                                 eset.filter = FALSE, cores = 1, 
+                                 verbose = FALSE))
+DefaultAssay(object = Flow_All.combined) <- "dorothea"
+Flow_All.combined <- ScaleData(Flow_All.combined)
+Flow_All.combined <- RunPCA(Flow_All.combined, features = rownames(Flow_All.combined), verbose = FALSE)
+Flow_All.combined <- FindNeighbors(Flow_All.combined, dims = 1:10, verbose = FALSE)
+Flow_All.combined <- FindClusters(Flow_All.combined, resolution = 0.5, verbose = FALSE)
+
+Flow_All.combined <- RunUMAP(Flow_All.combined, dims = 1:10, umap.method = "uwot", metric = "cosine")
+
+Flow_All.combined.markers <- FindAllMarkers(Flow_All.combined, only.pos = TRUE, min.pct = 0.25, 
+                               logfc.threshold = 0.25, verbose = FALSE)
+
+## We transform Viper scores, scaled by seurat, into a data frame to better 
+## handling the results
+
+viper_scores_df <- GetAssayData(Flow_All.combined, slot = "scale.data", 
+                                assay = "dorothea") %>%
+  data.frame(check.names = F) %>%
+  t()
+
+## We create a data frame containing the cells and their clusters
+CellsClusters <- data.frame(cell = names(Idents(Flow_All.combined)), 
+                            cell_type = as.character(Idents(Flow_All.combined)),
+                            check.names = F)
+
+## We create a data frame with the Viper score per cell and its clusters
+viper_scores_clusters <- viper_scores_df  %>%
+  data.frame() %>% 
+  rownames_to_column("cell") %>%
+  gather(tf, activity, -cell) %>%
+  inner_join(CellsClusters)
+
+## We summarize the Viper scores by cellpopulation
+summarized_viper_scores <- viper_scores_clusters %>% 
+  group_by(tf, cell_type) %>%
+  summarise(avg = mean(activity),
+            std = sd(activity))
+
+## Select the 20 most variable TFs. (20*8 populations = 140)
+highly_variable_tfs <- summarized_viper_scores %>%
+  group_by(tf) %>%
+  mutate(var = var(avg))  %>%
+  ungroup() %>%
+  top_n(60, var) %>%
+  distinct(tf)
+
