@@ -1,0 +1,219 @@
+# Analyze data Bimodal with Paclitaxel 
+
+Flow_All_Sample3 <- subset(Flow_All.combined, subset = SampleID == 'Sample3')
+Flow_All_Sample3 <- NormalizeData(Flow_All_Sample3, normalization.method = "LogNormalize", scale.factor = 10000)
+Flow_All_Sample3 <- FindVariableFeatures(Flow_All_Sample3, selection.method = "vst", nfeatures = 2000)
+Flow_All_Sample3 <- ScaleData(Flow_All_Sample3, features = rownames(Flow_All_Sample3))
+Flow_All_Sample3 <- RunPCA(Flow_All_Sample3, npcs = 30, verbose = FALSE)
+Flow_All_Sample3 <- RunTSNE(Flow_All_Sample3, reduction = "pca", dims = 1:30)
+Flow_All_Sample3 <- RunUMAP(Flow_All_Sample3, reduction = "pca", dims = 1:30)
+
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+Flow_All_Sample3 <- CellCycleScoring(Flow_All_Sample3, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+Idents(Flow_All_Sample3)<-Flow_All_Sample3@meta.data$Exp
+Shear_Pacli_col <- c(RColorBrewer::brewer.pal(11, "RdBu")[10],RColorBrewer::brewer.pal(11, "RdBu")[2],
+                     RColorBrewer::brewer.pal(9, "Set1")[5],c(RColorBrewer::brewer.pal(9, "Paired")[9]))
+Flow_All_Sample3$PlotNames<-ifelse(Flow_All_Sample3@meta.data$Exp=='G', "Ctrl_Physio", 
+                                   ifelse(Flow_All_Sample3@meta.data$Exp=='H', "Ctrl_Alt",
+                                          ifelse(Flow_All_Sample3@meta.data$Exp=='I', "Pacli_Physio","Pacli_Alt")))
+Idents(Flow_All_Sample3)<-Flow_All_Sample3@meta.data$PlotNames
+
+# Plot Fig 2 a
+DimPlot(Flow_All_Sample3, reduction = "umap", group.by = "PlotNames", order = c("Pacli_Alt","Pacli_Physio","Ctrl_Alt","Ctrl_Physio"),
+        pt.size = 1, cols = Shear_Pacli_col)+coord_equal()+no_x_text()+no_y_text()+labs(x='UMAP 1', y='UMAP 2') +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  ggtitle("Human Aortic Endothelial Cells (n=1,625)\nColoured by Shear and Drug Condition")+
+  theme(plot.title = element_text(size = 12, hjust = 0))+
+  theme(legend.position = c(0.65, 0.85),axis.title=element_text(size=12),
+        legend.text = element_text(size = 12), axis.ticks = element_blank())+theme(aspect.ratio=1)
+ggsave(file.path('900_FinalFigs', 'Fig3_shear_Pacli_UMAP.pdf'), device='pdf', units='in', width=7, height=7, scale=0.8)
+
+# Plot Fig 2 c
+
+Idents(Flow_All_Sample3)<-Flow_All_Sample3@meta.data$Drug
+paclitaxel_response <- FindAllMarkers(Flow_All_Sample3)
+paclitaxel_response_top10 <- paclitaxel_response %>% group_by(cluster) %>% slice_max(n = 10, order_by = avg_log2FC)
+DotPlot(Flow_All_Sample3, features = paclitaxel_response_top10$gene, dot.scale = 8) +
+  RotatedAxis()+theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  theme(panel.grid.major = element_line(colour = "grey",linetype = "dashed"))+
+  theme(aspect.ratio=2,axis.title.x=element_blank(),axis.title.y=element_blank())+
+  scale_y_discrete(limits=rev) + coord_flip()
+ggsave(file.path('900_FinalFigs', 'Fig3_Genes_Pacli_DotPlot.pdf'), device='pdf', units='in', width=6, height=9, scale=1)
+
+# Plot Fig 2 b
+
+dataToPlot <- paclitaxel_response
+dataToPlot$gene = rownames(dataToPlot)
+dataToPlot$abs_log2FC = abs(dataToPlot$avg_log2FC)
+titlePlot <- 'Pacli Response'
+FCcutoff <- log2(1.3) 
+dataToPlot2 <- dataToPlot %>% 
+  #filter(abs_log2FC>FCcutoff) %>% 
+  filter(cluster == "Ctrl")
+#dataToPlot2$avg_log2FC <- -dataToPlot2$avg_log2FC
+EnhancedVolcano(dataToPlot2,
+                lab = rownames(dataToPlot2),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                title = NULL,
+                subtitle = NULL,
+                pCutoff = 0.05,
+                FCcutoff = FCcutoff,
+                legendPosition = "none",
+                drawConnectors = TRUE,
+                widthConnectors = 0.75,
+                selectLab = unique(c(dataToPlot2$gene[order(dataToPlot2$p_val_adj)][1:10],
+                                    dataToPlot$gene[order(dataToPlot$avg_log2FC)][1:5],
+                                    dataToPlot$gene[order(-dataToPlot$avg_log2FC)][1:5])))+
+                #selectLab = c("CALR","MYH10","HSP90B1","HSPA5","POSTN","GJA5","GJA4",
+                #              "HMGA1","AKAP12","IGFBP5","VIM","EEF2","HLA-E"))+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  theme(aspect.ratio=1)
+ggsave(file.path('900_FinalFigs', 'Fig3_Genes_Pacli_VolcanoPlot.pdf'), device='pdf', units='in', width=8, height=8, scale=0.9)
+
+# DE of identified clusters with Deseq
+DefaultAssay(Flow_All_Sample3) <- "RNA"
+cells_drug <- Flow_All_Sample3@meta.data["Drug"]
+genes_cells_counts <- as.data.frame(GetAssayData(object = Flow_All_Sample3, slot = "counts"))
+
+dds <- DESeqDataSetFromMatrix(countData = genes_cells_counts ,
+                              colData = cells_drug,
+                              design = ~ Drug)
+
+dds <- DESeq(dds, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)  # Takes a long time!!!!!
+res <- results(dds, contrast=c("Drug","Ctrl","Pacli"))
+res$SYMBOL <- rownames(res)
+res2 <- as.data.frame(res[c("SYMBOL", "stat")])
+ranks_shear <- deframe(res2)
+
+pathways.hallmark <- gmtPathways("data\\c2-cp.c5.v6.2.symbols.gmt")
+#pathways.hallmark_filt <- pathways.hallmark[grep("ENDOTHELIAL|AORTA|ARTERIAL|ECM|EXTRACELLULAR|BINDING|VASCULATURE|BASEMENT|MEMBRANE|MATRIX|VESSEL|ANGIOGENESIS|JUNCTION|WOUND|HEART|PROLIFERATION|MIGRATION|DIFFERENTIATION",names(pathways.hallmark))]
+#pathways.hallmark_filt <- pathways.hallmark[grep("ENDOT",names(pathways.hallmark))]
+
+
+fgseaRes_shear <- fgsea(pathways=pathways.hallmark, stats=ranks_shear, nperm=100000)
+fgseaResTidy_shear <- fgseaRes_shear %>% as_tibble() %>% arrange(desc(NES))
+fgseaResTidy_shear <- fgseaResTidy_shear %>% filter(padj <0.05)
+fgseaResTidy_shear %>% dplyr::select(-leadingEdge, -ES, -nMoreExtreme) %>% arrange(padj) %>% DT::datatable()
+fgseaResTidy_toplot_shear <- unique(rbind(head(fgseaResTidy_shear,10),tail(fgseaResTidy_shear,10)))
+
+fgseaResTidy_toplot_shear_2 <- rbind(fgseaResTidy_shear[1:2,],
+                                     fgseaResTidy_shear[3:11,],
+                                     fgseaResTidy_shear[199,],
+                                     fgseaResTidy_shear[493,],
+                                     fgseaResTidy_shear[1239,],
+                                     fgseaResTidy_shear[1336,],
+                                     fgseaResTidy_shear[1342,],
+                                     fgseaResTidy_shear[1859:1862,])
+
+
+
+fgseaResTidy_toplot <- fgseaResTidy_toplot_shear
+fgseaResTidy_toplot$pathway <- gsub('_', ' ', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('GO ', '', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('REACTOME ', '', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('BIOCARTA ', '', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('KEGG ', '', fgseaResTidy_toplot$pathway)
+
+# Plot Fig 2 g
+
+ggplot(fgseaResTidy_toplot, aes(reorder(stringr::str_wrap(fgseaResTidy_toplot$pathway, 45), NES), NES)) +
+  geom_col(aes(fill=padj),color="black") +
+  coord_flip() +
+  labs(x="", y="Normalized Enrichment Score",
+       title="       Core Pacli-Induced Programs \n                 Pacli Enr.  Ctrl Enr.") + 
+  theme_classic()+theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),
+                        panel.grid.major.x = element_line(colour = "grey", linetype = "dashed", size = 0.25),
+                        panel.grid.major.y = element_blank(),aspect.ratio=2,
+                        legend.background = element_rect(color = "black", linetype = "solid"),
+                        legend.position = c(0.85, 0.15))+scale_fill_viridis_c(option="plasma",
+                                                                              guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))
+ggsave(file.path('900_FinalFigs', 'Fig2_pacli_GSEA.pdf'), device='pdf', units='in', width=5, height=5, scale=1.35)
+
+write.csv(x = fgseaResTidy_shear[,1:7],file = "GSEA_pacli.csv")
+
+
+# Analyze differential expression by Shear with Pacli
+DefaultAssay(Flow_All_Sample3) <- "RNA"
+Idents(Flow_All_Sample3)<-Flow_All_Sample3@meta.data$PlotNames
+shear_markers = FindAllMarkers(Flow_All_Sample3, random.seed=114)
+number_genes_to_plot <- 100
+shear_markers %>%  group_by(cluster) %>%  top_n(n = number_genes_to_plot, wt = avg_log2FC) -> topgenes
+#topgenes <- shear_markers
+
+Flow_All_Sample3_subset <- subset(Flow_All_Sample3, downsample = 1500)
+
+Phase_col <- brewer.pal(3,"Paired")
+
+anno_colour <- list(Shear = c("Physio" = Shear_col[2],
+                              "Alt" = Shear_col[1]),
+                    Drug = c("Ctrl" = brewer.pal(9,"RdPu")[3],
+                             "Pacli" = brewer.pal(9,"RdPu")[9]),
+                    Phase = c("G1" = Phase_col[1],
+                              "G2M" = Phase_col[2],
+                              "S" = Phase_col[3])
+)
+
+annoFull <- Flow_All_Sample3_subset@meta.data
+column_anno <- HeatmapAnnotation(Shear = annoFull$Shear,
+                                 Drug = annoFull$Drug,
+                                 Phase = annoFull$Phase,
+                                 which = "column",
+                                 border = TRUE,
+                                 col = anno_colour
+)
+
+col_fun = colorRamp2(c(-2,0,2),  brewer.pal(3,"YlOrRd"))
+
+genes_scaled <- FetchData(Flow_All_Sample3_subset, vars = topgenes$gene, slot = "scale.data")
+genes_scaled <- MinMax(data = genes_scaled, min = -2, max = 2)
+
+# Plot Fig 3 a
+
+pdf(file.path('900_FinalFigs', 'Fig3_shear_Pacli_heatmap_2.pdf'), width = 8, height = 7) 
+ht_list = Heatmap(t(genes_scaled), name = "Scaled", 
+                  top_annotation = column_anno,
+                  col = col_fun,
+                  show_row_dend = TRUE,
+                  show_column_dend = FALSE,
+                  border = TRUE, 
+                  cluster_rows = TRUE,
+                  cluster_columns = TRUE,
+                  show_column_names = FALSE,
+                  show_row_names = FALSE,
+                  clustering_distance_rows = "euclidean",
+                  clustering_distance_columns = "euclidean",
+                  row_dend_side = "right",
+                  #col = heatmap_colours,
+                  #column_order = 200:1,
+                  #column_split = c(rep("Physio", 150), rep("Alt", 150)),
+                  cluster_column_slices = FALSE,
+                  #row_split = c(rep("Physio genes", number_genes_to_plot),
+                  #              rep("Alt genes", number_genes_to_plot)),
+                  #width = unit(8, "cm")
+                  row_names_gp = gpar(fontsize = 8)
+)
+draw(ht_list, heatmap_legend_side = "left",merge_legend = TRUE)
+dev.off()
+
+
+shear_markers %>%  group_by(cluster) %>%  top_n(n = 20, wt = avg_log2FC) -> topgenes_short
+
+Idents(Flow_All_Sample3)<-Flow_All_Sample3@meta.data$PlotNames
+Idents(Flow_All_Sample3)<- factor(x = Idents(Flow_All_Sample3), 
+                                               levels = c("Ctrl_Physio","Pacli_Physio","Ctrl_Alt","Pacli_Alt"))
+
+# Plot Fig 3 b
+
+VlnPlot(Flow_All_Sample3, features = c("ADAMTS9","RAPGEF5","RGS5","PCDH12","PI16",
+                                       "STC2","ACAT2","NAV3","INSIG1","HMGCS1",
+                                       "FABP4","ALDH1A1","VWF","CDH13","BGN",
+                                       "EGR1","MGP","HES1","EMCN","CFH"), log = FALSE, pt.size = 0,
+        stack = TRUE, flip = TRUE, split.by = "PlotNames", cols = c(Shear_Pacli_col[1],
+                                                                     Shear_Pacli_col[3],
+                                                                     Shear_Pacli_col[2],
+                                                                     Shear_Pacli_col[4]))+
+  theme(aspect.ratio=0.2)
+ggsave(file.path('900_FinalFigs', 'Fig3_pacli_ViolinAvgExp.pdf'), device='pdf', units='in', width=5, height=5, scale=1.8)
