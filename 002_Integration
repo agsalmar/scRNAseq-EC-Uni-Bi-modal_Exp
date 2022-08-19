@@ -1,0 +1,21 @@
+# Unimodal experiments (n = 3) were integrated as explained in:
+# https://satijalab.org/seurat/articles/integration_introduction.html
+
+# This is a modified version described in the link above:
+
+# Flow_All is a Seurat object with all the unimodal data merged.
+
+Flow_All.list <- SplitObject(Flow_All, split.by = "SampleID")
+Flow_All.list <- lapply(X = Flow_All.list, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+Flow_All.anchors <- FindIntegrationAnchors(object.list = Flow_All.list, 
+                                         anchor.features = SelectIntegrationFeatures(object.list = Flow_All.list))
+Flow_All.combined <- IntegrateData(anchorset = Flow_All.anchors)
+DefaultAssay(Flow_All.combined) <- "integrated"
+Flow_All.combined <- ScaleData(Flow_All.combined, verbose = FALSE)
+Flow_All.combined <- RunPCA(Flow_All.combined, npcs = 30, verbose = FALSE)
+Flow_All.combined <- RunUMAP(Flow_All.combined, reduction = "pca", dims = 1:30)
+Flow_All.combined <- RunTSNE(Flow_All.combined, reduction = "pca", dims = 1:30)
