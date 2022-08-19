@@ -3,7 +3,7 @@ s.genes <- cc.genes$s.genes
 g2m.genes <- cc.genes$g2m.genes
 Flow_All.combined <- CellCycleScoring(Flow_All.combined, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
 
-# Plot Fig 1 B
+# Plot Fig 1 b
 Shear_col <- c(RColorBrewer::brewer.pal(11, "RdBu")[2],RColorBrewer::brewer.pal(11, "RdBu")[10])
 DimPlot(Flow_All.combined, reduction = "umap", group.by = "Shear", order = c("Physio","Alt"),
         pt.size = 1, cols = Shear_col)+coord_equal()+no_x_text()+no_y_text()+labs(x='UMAP 1', y='UMAP 2') +
@@ -164,3 +164,93 @@ plot_grid(featureplot4,
           featureplot1, featureplot2,featureplot3,featureplot8,
           NULL, legend, NULL, ncol=4, rel_heights = c(1, 1, 0.2))+theme(aspect.ratio=0.6)
 ggsave(file.path('900_FinalFigs', 'Fig1_features_UMAP.pdf'), device='pdf', units='in', width=10, height=6, scale=1)
+
+#Plot Fig 1 c
+
+Idents(Flow_All.combined)<-Flow_All.combined@meta.data$Shear
+shear_markers = FindAllMarkers(Flow_All.combined, random.seed=114)
+number_genes_to_plot <- 20
+shear_markers %>%  group_by(cluster) %>%  top_n(n = number_genes_to_plot, wt = avg_log2FC) -> topgenes
+
+Physio_ds_Sample1 <- subset(Flow_All.combined, subset = Shear == 'Physio' & SampleID == 'Sample1', downsample = 50)
+Physio_ds_Sample2 <- subset(Flow_All.combined, subset = Shear == 'Physio' & SampleID == 'Sample2', downsample = 50)
+Physio_ds_Sample3 <- subset(Flow_All.combined, subset = Shear == 'Physio' & SampleID == 'Sample3', downsample = 50)
+Alt_ds_Sample1 <- subset(Flow_All.combined, subset = Shear == 'Alt' & SampleID == 'Sample1', downsample = 50)
+Alt_ds_Sample2 <- subset(Flow_All.combined, subset = Shear == 'Alt' & SampleID == 'Sample2', downsample = 50)
+Alt_ds_Sample3 <- subset(Flow_All.combined, subset = Shear == 'Alt' & SampleID == 'Sample3', downsample = 50)
+Flow_ds <- subset(Flow_All.combined, cells = c(rownames(Physio_ds_Sample1@meta.data),
+                                               rownames(Physio_ds_Sample2@meta.data),
+                                               rownames(Physio_ds_Sample3@meta.data),
+                                               rownames(Alt_ds_Sample1@meta.data),
+                                               rownames(Alt_ds_Sample2@meta.data),
+                                               rownames(Alt_ds_Sample3@meta.data)))
+
+Phase_col <- brewer.pal(3,"Paired")
+
+anno_colour <- list(Shear = c("Physio" = Shear_col[2],
+                              "Alt" = Shear_col[1]),
+                    SampleID = c("Sample1" = SampleID_col[1],
+                                 "Sample2" = SampleID_col[2],
+                                 "Sample3" = SampleID_col[3]),
+                    Phase = c("G1" = Phase_col[1],
+                              "G2M" = Phase_col[2],
+                              "S" = Phase_col[3])
+)
+
+annoFull <- Flow_ds@meta.data
+column_anno <- HeatmapAnnotation(Shear = annoFull$Shear,
+                                 SampleID = annoFull$SampleID,
+                                 Phase = annoFull$Phase,
+                                 which = "column",
+                                 border = TRUE,
+                                 col = anno_colour
+)
+
+col_fun = colorRamp2(c(-2, 0, 2), brewer.pal(3,"YlOrRd"))
+
+
+genes_scaled <- FetchData(Flow_ds, vars = topgenes$gene, slot = "scale.data")
+genes_scaled <- MinMax(data = genes_scaled, min = -2, max = 2)
+
+pdf(file.path('900_FinalFigs', 'Fig1_shear_heatmap.pdf'), width = 8, height = 7) 
+ht_list = Heatmap(t(genes_scaled), name = "Scaled", 
+        top_annotation = column_anno,
+        col = col_fun,
+        show_row_dend = FALSE,
+        show_column_dend = FALSE,
+        border = TRUE, 
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_column_names = FALSE,
+        #col = heatmap_colours,
+        #column_order = 200:1,
+        column_split = c(rep("Physio", 150), rep("Alt", 150)),
+        cluster_column_slices = FALSE,
+        row_split = c(rep("Alt genes", number_genes_to_plot),
+                      rep("Physio genes", number_genes_to_plot)),
+        #width = unit(8, "cm")
+        row_names_gp = gpar(fontsize = 8)
+        )
+draw(ht_list, heatmap_legend_side = "left",merge_legend = TRUE)
+dev.off()
+
+# Fig 1 e
+fgseaResTidy_toplot <- fgseaResTidy_toplot_shear_2
+fgseaResTidy_toplot$pathway <- gsub('_', ' ', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('GO ', '', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('REACTOME ', '', fgseaResTidy_toplot$pathway)
+fgseaResTidy_toplot$pathway <- gsub('BIOCARTA ', '', fgseaResTidy_toplot$pathway)
+
+ggplot(fgseaResTidy_toplot, aes(reorder(stringr::str_wrap(fgseaResTidy_toplot$pathway, 55), NES), NES)) +
+  geom_col(aes(fill=padj),color="black") +
+  coord_flip() +
+  labs(x="", y="Normalized Enrichment Score",
+       title="            Core Shear-Induced Programs in HAEC \n          Alt Shear Enriched  Physio Shear Enriched") + 
+  theme_classic()+theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),
+                        panel.grid.major.x = element_line(colour = "grey", linetype = "dashed", size = 0.25),
+                        panel.grid.major.y = element_blank(),aspect.ratio=1,
+                        legend.background = element_rect(color = "black", linetype = "solid"),
+                        legend.position = c(0.85, 0.25))+scale_fill_viridis_c(option="plasma",
+                                                                              guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))
+ggsave(file.path('900_FinalFigs', 'Fig1_shear_GSEA.pdf'), device='pdf', units='in', width=7.1, height=4, scale=1.2)
+
