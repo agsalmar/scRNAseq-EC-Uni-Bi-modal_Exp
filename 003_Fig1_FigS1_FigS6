@@ -254,3 +254,54 @@ ggplot(fgseaResTidy_toplot, aes(reorder(stringr::str_wrap(fgseaResTidy_toplot$pa
                                                                               guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))
 ggsave(file.path('900_FinalFigs', 'Fig1_shear_GSEA.pdf'), device='pdf', units='in', width=7.1, height=4, scale=1.2)
 
+# Fig 1 f
+summarized_viper_scores_df <- summarized_viper_scores %>%
+  semi_join(highly_variable_tfs, by = "tf") %>%
+  dplyr::select(-std) %>%   
+  spread(tf, avg) %>%
+  data.frame(row.names = 1, check.names = FALSE) 
+palette_length = 100
+my_color = colorRampPalette(c("Darkblue", "white","red"))(palette_length)
+
+my_breaks <- c(seq(min(summarized_viper_scores_df), 0, 
+                   length.out=ceiling(palette_length/2) + 1),
+               seq(max(summarized_viper_scores_df)/palette_length, 
+                   max(summarized_viper_scores_df), 
+                   length.out=floor(palette_length/2)))
+
+viper_hmap <- pheatmap(t(summarized_viper_scores_df),fontsize=14, 
+                       fontsize_row = 10, 
+                       color=my_color, breaks = my_breaks, 
+                       main = "Shear-Induced TF",
+                       treeheight_col = 0, treeheight_row =10,
+                       border_color = NA,
+                       cellwidth = 18,cellheight = 15) 
+
+
+row_dend = as.dendrogram(hclust(dist(t(summarized_viper_scores_df))))
+row_dend = color_branches(row_dend, k = 2, col = Shear_col)
+
+pdf(file.path('900_FinalFigs', 'Fig1_TF_heatmap.pdf'), width = 8, height = 5) 
+TF_dend <- Heatmap(t(summarized_viper_scores_df), name = "Avg Exp", 
+        col = brewer.pal(8,"RdBu"),
+        #show_row_dend = FALSE,
+        show_column_dend = FALSE,
+        border = TRUE, 
+        cluster_rows = set(raise.dendrogram(row_dend, 0.01), "branches_lwd", 1),
+        #cluster_rows = FALSE,
+        #cluster_columns = FALSE,
+        #show_column_names = FALSE,
+        #row_split = c(rep("Physio", 19), rep("Alt", 11)),
+        cluster_column_slices = FALSE,
+        #row_split = c(rep("Physio genes", 1),
+        #              rep("Alt genes", number_genes_to_plot)),
+        row_names_gp = gpar(fontsize = 8),
+        row_dend_width = unit(10, "cm"),
+        width = ncol(t(summarized_viper_scores_df))*unit(5, "mm")
+)
+draw(TF_dend, heatmap_legend_side = "right",merge_legend = TRUE)
+dev.off()
+
+
+
+
