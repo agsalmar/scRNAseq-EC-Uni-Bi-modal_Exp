@@ -1,0 +1,136 @@
+# Analysis all flow conditions no drug
+
+# rm(list = ls())
+
+# install.packages("dplyr")
+# install.packages("Seurat")
+# install.packages('patchwork')
+# install.packages('Matrix')
+# BiocManager::install("ComplexHeatmap")
+# BiocManager::install("dorothea")
+
+# Load libraries
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(Matrix)
+library(ggplot2)
+library(ggthemr)
+library(cowplot)
+library(MASS)
+library(Hmisc)
+library(corrplot)
+library(ggdendro)
+library(pheatmap)
+library(RColorBrewer)
+library(clusterProfiler)
+library(writexl)
+library(WGCNA)
+library(flashClust)
+library(readxl)
+library(reshape2)
+library(ggvenn)
+library(DESeq2)
+library(EnhancedVolcano)
+library(msigdbr)
+library(fgsea)
+library(tibble)
+library(ComplexHeatmap)
+library(circlize)
+library(ReactomeGSA)
+library(dorothea)
+library(tidyr)
+library(viper)
+library(dendextend)
+library(heatmaply)
+
+# Load data Flow with No Drug (2018) 
+ND_1_raw = read.table(file.path('data','raw_flow_data.txt'),
+                      sep=",",
+                      header=T,
+                      row.names=1)
+ND_1_raw = ND_1_raw %>% data.matrix() %>% Matrix(sparse=T)
+Flow_S1 = CreateSeuratObject(counts=ND_1_raw, min.cells=10, min.genes=500,
+                          names.field=2, names.delim="_",project="Flow_S1")
+rm(ND_1_raw)
+
+# Load data Flow with Rapamycin (2019) 
+RA_raw = read.table(file.path('data','raw_rapa_data.txt'),
+                    sep=",",
+                    header=T,
+                    row.names=1)
+RA_raw = RA_raw %>% data.matrix() %>% Matrix(sparse=T)
+Flow_S2 = CreateSeuratObject(counts=RA_raw, min.cells=10, min.genes=500,
+                        names.field=2, names.delim="_",project="Flow_S2")
+rm(RA_raw)
+
+# Load data High Flow with Paclitaxel (2021) 
+H_ND_2_raw <- Read10X(data.dir = paste(getwd(),"/data/H_ND/",sep=''))
+colnames(H_ND_2_raw)<-paste('H_ND_2_',colnames(H_ND_2_raw),sep='')
+H_ND_2 = CreateSeuratObject(counts=H_ND_2_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_")
+rm(H_ND_2_raw)
+L_ND_2_raw <- Read10X(data.dir = paste(getwd(),"/data/L_ND/",sep=''))
+colnames(L_ND_2_raw)<-paste('L_ND_2_',colnames(L_ND_2_raw),sep='')
+L_ND_2 = CreateSeuratObject(counts=L_ND_2_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_")
+rm(L_ND_2_raw)
+H_PA_raw <- Read10X(data.dir = paste(getwd(),"/data/H_PA/",sep=''))
+colnames(H_PA_raw)<-paste('H_PA_',colnames(H_PA_raw),sep='')
+H_PA = CreateSeuratObject(counts=H_PA_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_")
+rm(H_PA_raw)
+L_PA_raw <- Read10X(data.dir = paste(getwd(),"/data/L_PA/",sep=''))
+colnames(L_PA_raw)<-paste('L_PA_',colnames(L_PA_raw),sep='')
+L_PA = CreateSeuratObject(counts=L_PA_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_")
+rm(L_PA_raw)
+Flow_S3 <- merge(H_ND_2, y = c(L_ND_2, H_PA, L_PA), project = "Flow_S3")
+rm(H_ND_2)
+rm(L_ND_2)
+rm(H_PA)
+rm(L_PA)
+
+# Add additional metadata
+# A: 2018, H, ND (HiB, HiD)
+# B: 2018, L, ND (LoD, LoF)
+# C: 2019, H, RA (A)
+# D: 2019, L, RA (E)
+# E: 2019, H, ND (B)
+# F: 2019, L, ND (H)
+# G: 2021, H, ND
+# H: 2021, L, ND
+# I: 2021, H, PA
+# J: 2021, L, PA
+Flow_S1@meta.data$Exp<-ifelse(grepl("Hi", Flow_S1@assays[["RNA"]]@counts@Dimnames[[2]]),'A','B')
+Flow_S1@meta.data$SampleID<-'Sample1'
+Flow_S2@meta.data$Exp<-ifelse(grepl("_B", Flow_S2@assays[["RNA"]]@counts@Dimnames[[2]]),'E',
+                              ifelse(grepl("_H", Flow_S2@assays[["RNA"]]@counts@Dimnames[[2]]),'F',
+                                     ifelse(grepl("_E", Flow_S2@assays[["RNA"]]@counts@Dimnames[[2]]),'D','C')))
+Flow_S2@meta.data$SampleID<-'Sample2'
+Flow_S3@meta.data$Exp<-ifelse(grepl("H_ND", Flow_S3@assays[["RNA"]]@counts@Dimnames[[2]]),'G',
+                              ifelse(grepl("L_ND", Flow_S3@assays[["RNA"]]@counts@Dimnames[[2]]),'H',
+                                     ifelse(grepl("H_PA", Flow_S3@assays[["RNA"]]@counts@Dimnames[[2]]),'I','J')))
+Flow_S3@meta.data$SampleID<-'Sample3'
+Idents(Flow_S1)<-Flow_S1@meta.data$Exp
+Idents(Flow_S2)<-Flow_S2@meta.data$Exp
+Idents(Flow_S3)<-Flow_S3@meta.data$Exp
+Flow_S1@meta.data$Shear<-ifelse(Flow_S1@meta.data[["Exp"]]=='A', "Physio", "Alt")
+Flow_S2@meta.data$Shear<-ifelse(Flow_S2@meta.data[["Exp"]]=='E' | Flow_S2@meta.data[["Exp"]]=='C', "Physio", "Alt")
+Flow_S3@meta.data$Shear<-ifelse(Flow_S3@meta.data[["Exp"]]=='G' | Flow_S3@meta.data[["Exp"]]=='I', "Physio", "Alt")
+Flow_S1@meta.data$Drug<-"Ctrl"
+Flow_S2@meta.data$Drug<-ifelse(Flow_S2@meta.data[["Exp"]]=='E' | Flow_S2@meta.data[["Exp"]]=='F', "Ctrl", "Rapa")
+Flow_S3@meta.data$Drug<-ifelse(Flow_S3@meta.data[["Exp"]]=='G' | Flow_S3@meta.data[["Exp"]]=='H', "Ctrl", "Pacli")
+
+# QC
+Flow_S1[["percent.mt"]] <- PercentageFeatureSet(Flow_S1, pattern = "^MT-")
+Flow_S2[["percent.mt"]] <- PercentageFeatureSet(Flow_S2, pattern = "^MT-")
+Flow_S3[["percent.mt"]] <- PercentageFeatureSet(Flow_S3, pattern = "^MT-")
+
+# Filter data
+Flow_S1 <- subset(Flow_S1, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
+Flow_S2 <- subset(Flow_S2, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
+Flow_S3 <- subset(Flow_S3, subset = nFeature_RNA > 500 & nCount_RNA > 1000 & percent.mt < 5)
+
+# Integrate data sets and split by SampleID
+Flow_All <- merge(Flow_S1, y = c(Flow_S2,Flow_S3), project = "Flow_All")
