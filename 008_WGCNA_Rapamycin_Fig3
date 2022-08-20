@@ -1,3 +1,5 @@
+# This script includes WGCNA (see line 260) and previous analysis (t-sne, enrichment with cluster profiler)
+
 # Load libraries
 library(dplyr)
 library(Seurat)
