@@ -1,0 +1,722 @@
+# This script includes WGCNA (see line 298) and previous analysis (t-sne, enrichment with cluster profiler)
+
+# Load libraries
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(Matrix)
+library(ggplot2)
+library(ggthemr)
+library(cowplot)
+library(MASS)
+library(Hmisc)
+library(corrplot)
+library(ggdendro)
+library(pheatmap)
+library(RColorBrewer)
+library(clusterProfiler)
+library(writexl)
+library(WGCNA)
+library(flashClust)
+library(readxl)
+library(reshape2)
+
+# Load data High Flow with No Drug (2021) 
+H_ND_2_raw <- Read10X(data.dir = paste(getwd(),"/data/H_ND/",sep=''))
+H_ND_2 = CreateSeuratObject(counts=H_ND_2_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_",project="Flow_H_ND_2")
+rm(H_ND_2_raw)
+
+# Load data High Flow with No Drug (2021) 
+L_ND_2_raw <- Read10X(data.dir = paste(getwd(),"/data/L_ND/",sep=''))
+L_ND_2 = CreateSeuratObject(counts=L_ND_2_raw, min.cells=10, min.genes=500,
+                            names.field=2, names.delim="_",project="Flow_L_ND_2")
+rm(L_ND_2_raw)
+
+# Load data High Flow with No Drug (2021) 
+H_PA_raw <- Read10X(data.dir = paste(getwd(),"/data/H_PA/",sep=''))
+H_PA = CreateSeuratObject(counts=H_PA_raw, min.cells=10, min.genes=500,
+                          names.field=2, names.delim="_",project="Flow_H_PA")
+rm(H_PA_raw)
+
+# Load data High Flow with No Drug (2021) 
+L_PA_raw <- Read10X(data.dir = paste(getwd(),"/data/L_PA/",sep=''))
+L_PA = CreateSeuratObject(counts=L_PA_raw, min.cells=10, min.genes=500,
+                          names.field=2, names.delim="_",project="Flow_L_PA")
+rm(L_PA_raw)
+
+# Merge libraries
+rapasw2 <- merge(H_ND_2, y = c(L_ND_2, H_PA, L_PA), add.cell.ids = 
+                    c("H_ND_2","L_ND_2","H_PA","L_PA"), project = "FlowChem")
+
+rm(H_ND_2)
+rm(L_ND_2)
+rm(H_PA)
+rm(L_PA)
+
+# Add additional metadata to shear, drug, and experimental set Seurat for plotting
+rapasw2@meta.data$orig.ident<-ifelse(grepl("H_ND", rapasw2@assays[["RNA"]]@counts@Dimnames[[2]]),'G',
+                                     ifelse(grepl("L_ND", rapasw2@assays[["RNA"]]@counts@Dimnames[[2]]),'H',
+                                            ifelse(grepl("H_PA", rapasw2@assays[["RNA"]]@counts@Dimnames[[2]]),'I','J')))
+
+
+# G: 2021, H, ND
+# H: 2021, L, ND
+# I: 2021, H, PA
+# J: 2021, L, PA
+
+#Set up ggthemr theme
+p = c("#47a4ff", #Light blue 1
+      "#89c21b", #Lime 2
+      "#90178f", #Purple 3
+      "#01c37b", #Seafoam 4
+      "#fa278a", #Pink 5
+      "#f0ad00", #Light orange 6
+      "#1951a0", #Blue 7
+      "#ff9b3f", #Orange 8
+      "#9e0d65", #Plum 9
+      "#cb8cff", #Light purple 10
+      "#e11d39", #Red 11
+      "#857400", #Brown 12
+      "#ff71c8", #Pink 13
+      "#b0003c", #Maroon 14
+      "#9b5b76") #Dusk 15
+
+#Set up Shear levels order for plotting
+#levels = c("Physio", "Alt")
+#rapasw2@meta.data$Shear = factor(x=rapasw2@meta.data$Shear, levels=levels)
+
+# QC - MT
+mito.genes = grep("^MT-",rownames(rapasw2@assays[["RNA"]]@counts),value=T)
+cs = Matrix::colSums #BiocGenerics version of colSums doesn't work on sparse matrices
+percent.mito = cs(rapasw2@assays[["RNA"]]@counts[mito.genes,])/cs(rapasw2@assays[["RNA"]]@counts)
+rapasw2 = AddMetaData(rapasw2,percent.mito,"percent.mito")
+
+# Filter data (less than 30% MT)
+rapasw2 = subset(rapasw2, subset = percent.mito < 0.3)
+
+# Normalize data
+rapasw2 = NormalizeData(rapasw2, normalization.method="LogNormalize",scale.factor=10000)
+
+# Identification of highly variable features
+rapasw2 = FindVariableFeatures(object=rapasw2, mean.function=ExpMean, dispersion.function=LogVMR)
+
+# Scale data
+rapasw2 = ScaleData(rapasw2)
+
+#Relabel flow and rapa status
+rapasw2@meta.data$condition = plyr::mapvalues(rapasw2@meta.data$orig.ident, 
+                                              from=c("I","G","J","H"), 
+                                              to=c("Hi-PACLI", "Hi-CTRL", "Lo-PACLI", "Lo-CTRL"))
+rapasw2@meta.data$drug = ifelse(grepl("PACLI", rapasw2@meta.data$condition), "PACLI", "CTRL")
+rapasw2@meta.data$flow = ifelse(grepl("Hi", rapasw2@meta.data$condition), "Hi", "Lo")
+rapasw2@meta.data$Shear = ifelse(grepl("Hi", rapasw2@meta.data$condition), "Physio", "Alt")
+rapasw2@meta.data$condition2 = paste(rapasw2@meta.data$Shear, rapasw2@meta.data$drug, sep="_")
+rapasw2@meta.data$condition2 = factor(rapasw2@meta.data$condition2, levels=c('Physio_CTRL', 'Physio_PACLI', 'Alt_CTRL' ,'Alt_PACLI'))
+
+ribo.genes = grep("^RP[LS]",rownames(rapasw2@assays[["RNA"]]@counts),value=T)
+cs = Matrix::colSums #BiocGenerics version of colSums doesn't work on sparse matrices
+percent.ribo = cs(rapasw2@assays[["RNA"]]@counts[ribo.genes,])/cs(rapasw2@assays[["RNA"]]@counts)
+rapasw2 = AddMetaData(rapasw2,percent.ribo,"percent.ribo")
+
+# Run Principal Component Analysis (PCA)
+rapasw2=RunPCA(object = rapasw2, pc.genes = rapasw2@var.genes,do.print = FALSE)
+
+# Run tSNE 
+rapasw2 = RunTSNE(rapasw2, dims.use=2:10, do.fast=T, seed.use=114) #PC1 excluded because it correlates with QC metrics
+
+#Physio pacli response and alt pacli response with cluster enrichment and enricher enrichment-----
+Idents(object = rapasw2) <- "condition"
+physio_rapa_response = FindMarkers(rapasw2, ident.1='Hi-PACLI', ident.2='Hi-CTRL', random.seed=114)
+physio_rapa_response$gene = rownames(physio_rapa_response)
+
+alt_rapa_response = FindMarkers(rapasw2, ident.1='Lo-PACLI', ident.2='Lo-CTRL', random.seed=114)
+alt_rapa_response$gene = rownames(alt_rapa_response)
+
+#Gene set enrichment on up and down markers of paclitaxel, filtered by thresholds and adjusted p-value
+c2CPc5 = "data\\c2-cp.c5.v6.2.symbols.gmt"
+
+#Take a look at genes expressed in at least 1% of cells in overall dataset as background
+#Distribution of how many cells each gene is expressed in
+numCells = rowSums(as.matrix(rapasw2@assays[["RNA"]]@counts!=0))
+totCells = dim(rapasw2@assays[["RNA"]]@counts)[2]
+exprGenes = names(numCells)[numCells>0.01*totCells]
+
+#Function to read a marker-cluster dataframe from Seurat to form required by clustEnrich function
+clustReshape = function(markers){
+  #markers -- a data frame like that produced by Seurat FindAllMarkers with marker-gene assignments
+  clustnames = names(table(markers$cluster))
+  clusters = vector('list', length=length(clustnames))
+  for(i in 1:length(clustnames)){
+    genes = filter(markers, cluster==clustnames[i])$gene
+    clusters[[i]] = data.frame('genes'=genes)
+  }
+  assignments = setNames(markers$cluster, markers$gene)
+  output = list("Assignments"=assignments, "Clusters"=clusters)
+}
+
+#Clusters --> enrichment function
+clustEnrich = function(clust_list, fileseed, universe=NULL, qvalueCutoff=0.05, gmtfile = "data\\msigdb.v6.2.symbols.gmt"){
+  #clust_list -- list that should contain a list of dataframes (clusters) with one column (genes) named "Clusters"
+  # as well as gene-cluster assignments in "Assignments"
+  #gmtfile -- MSigDB gmt file, default was downloaded 03-25-2019
+  #fileseed -- start of filename for saving files generated in this function call
+  #universe -- gene background universe, NULL to use clusterProfiler default (all annotated)
+  
+  clust_c = clust_list[["Clusters"]] #Take the list of 1-D cluster dataframes from the input nested list
+  mycl = clust_list[["Assignments"]] #Gene-cluster assignments
+  
+  #Perform enrichment
+  msigdb = read.gmt(gmtfile)
+  clust_c_msigdb = vector('list') #Declare an empty list
+  for (k in 1:length(clust_c)){
+    clust = paste0("clust",k)
+    e = enricher('gene'=clust_c[[k]][,1], universe = universe, TERM2GENE = msigdb, qvalueCutoff = qvalueCutoff)
+    if(is.null(e)){
+      clust_c_msigdb[[clust]] = new("nullResult", result=data.frame("Result"="No mapped genes found"))
+    }else{
+      clust_c_msigdb[[clust]] = e
+    }
+  }
+  #Write output file
+  filename = paste0(fileseed,
+                    "_clustEnrich.xlsx")
+  writeEnrichResult(mycl, clust_c_msigdb, filename)
+  return(clust_c_msigdb)
+}
+
+#Functions to perform gene clustering and enrichment analysis from Seurat object and list of genes
+#Function to write enrichment results to file
+writeEnrichResult = function(cluster_assigns, enrichResult_list, filename){
+  #cluster_assigns is a named vector of cluster assignments (names=genes, values=clusters)
+  #enrichResult_list is a list of enrichResults from clusterProfiler, but some entries may be NULL if no genes can map
+  #filename should end in .xlsx
+  output = lapply(enrichResult_list, "slot", "result")
+  clustersDF = data.frame("gene"=names(cluster_assigns), "cluster"=cluster_assigns)
+  output[["Assignments"]] = clustersDF
+  write_xlsx(output, filename)
+}
+
+#Filter physio pacli respones
+prr_filt = physio_rapa_response %>% filter(p_val_adj<0.05) %>% filter(abs(avg_log2FC)>log(1.3))
+prr_filt$cluster = ifelse(prr_filt$avg_log2FC>0, 'Up', 'Down')
+prr_filt_clustList = clustReshape(prr_filt)
+prr_filt_enrich = clustEnrich(clust_list = prr_filt_clustList,
+                              fileseed="020_analysis\\prr_filt_exprbkgd",
+                              universe=exprGenes,
+                              gmtfile = c2CPc5) 
+
+#Making more general enricher objects from physio pacli response up/downregulated genes
+physio_rapa_response$abs_log2FC = abs(physio_rapa_response$avg_log2FC)
+
+physio_rapa_upreg = physio_rapa_response %>% filter(p_val_adj<0.05) %>% filter(avg_log2FC>log(1.3)) %>% arrange(desc(avg_log2FC))
+physio_rapa_downreg = physio_rapa_response %>% filter(p_val_adj<0.05) %>% filter(avg_log2FC< -log(1.3)) %>% arrange(avg_log2FC) 
+
+#General enricher objects from alt pacli response up/downregulated genes 
+alt_rapa_response$abs_log2FC = abs(alt_rapa_response$avg_log2FC)
+
+alt_rapa_upreg = alt_rapa_response %>% filter(p_val_adj<0.05) %>% filter(avg_log2FC>log(1.3)) %>% arrange(desc(avg_log2FC))
+alt_rapa_downreg = alt_rapa_response %>% filter(p_val_adj<0.05) %>% filter(avg_log2FC< -log(1.3)) %>% arrange(avg_log2FC) 
+
+msigdb = read.gmt(c2CPc5)
+
+#Fixing titles in msigdb
+msigdb$names = as.character(msigdb$term)                  
+msigdb$names = gsub("_", " ", msigdb$names, fixed=T)      
+msigdb$term = msigdb$names                                 
+msigdb$names = NULL                                       
+
+pr_downreg_e = enricher(gene=physio_rapa_downreg$gene, 
+                        TERM2GENE = msigdb, 
+                        qvalueCutoff = 0.05)
+
+pr_upreg_e = enricher(gene=physio_rapa_upreg$gene, 
+                      TERM2GENE=msigdb,
+                      qvalueCutoff=0.05)
+
+ar_downreg_e = enricher(gene=alt_rapa_downreg$gene, 
+                        TERM2GENE = msigdb, 
+                        qvalueCutoff = 0.05)
+
+ar_upreg_e = enricher(gene=alt_rapa_upreg$gene, 
+                      TERM2GENE=msigdb,
+                      qvalueCutoff=0.05)
+
+#Upregulated/downregulated with paclitaxel gene set overlap enrichment dotplots
+dotplot(pr_downreg_e) + 
+  ggtitle('Down with Pacli') + 
+  labs(x='Gene Ratio', colour='Adj P-val') +
+  guides(size = guide_legend(order=1),
+         colour = guide_colourbar(order=2))
+ggsave(file.path('020_figs', '002_prr-enriched-dotplots-downreg.tiff'), device='tiff')
+
+dotplot(pr_upreg_e) +
+  ggtitle('Up with Pacli') + 
+  labs(x='Gene Ratio', colour='Adj P-val') +
+  guides(size = guide_legend(order=1),
+         colour = guide_colourbar(order=2))
+ggsave(file.path('020_figs', '003_prr-enriched-dotplots-upreg.tiff'), device='tiff')
+
+#Making enricher object for difference between physio and alt paclitaxel response-----
+both_response_genes = intersect(physio_rapa_response$gene, alt_rapa_response$gene)
+
+phys_only_genes = setdiff(physio_rapa_response$gene, alt_rapa_response$gene)
+phys_only_response = filter(physio_rapa_response, gene %in% phys_only_genes)
+phys_only_sig = phys_only_response %>% filter(abs_log2FC > log(1.3)) 
+
+phys_only_e = enricher(gene=phys_only_sig$gene, 
+                       TERM2GENE = msigdb, 
+                       qvalueCutoff = 0.05)
+
+alt_only_genes = setdiff(alt_rapa_response$gene, physio_rapa_response$gene)
+alt_only_response = filter(alt_rapa_response, gene %in% alt_only_genes)
+alt_only_sig = alt_only_response %>% filter(abs_log2FC > log(1.3))
+
+alt_only_e = enricher(gene=alt_only_sig$gene,
+                      TERM2GENE = msigdb,
+                      qvalueCutoff = 0.05)
+
+#Figure : Difference between pacli response in physio and altered-shear cells-----
+
+#Enrichment dotplot for physio-only genes
+dotplot(phys_only_e) +
+  ggtitle('Physio-Specific Pacli Response')
+ggsave(file.path('020_figs', '004_physio-only-enrich-dotplot.tiff'), device='tiff')
+
+#Split dotplot of top physio-only genes
+phys_only_sig = phys_only_sig %>% arrange(desc(abs_log2FC))
+phys_only_top = head(phys_only_sig$gene, 10)
+
+Idents(rapasw2)<-rapasw2@meta.data$condition2
+
+DotPlot(rapasw2, features = rev(phys_only_top))  + 
+  labs(size="Expression Fraction", color="Scaled Expression") +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))  
+ggsave(file.path('020_figs', '005_phys-alt-RR_SplitDotplot.tiff'), device='tiff')
+
+
+#WGCNA analysis-----
+
+#Set up physio and altered rds sets
+Idents(rapasw2)<-rapasw2@meta.data$flow
+
+low = subset(rapasw2, idents = 'Lo')
+low = NormalizeData(low, normalization.method="LogNormalize",scale.factor=10000)
+low = FindVariableFeatures(object=low, mean.function=ExpMean, dispersion.function=LogVMR)
+low = ScaleData(low, features=low@assays[["RNA"]]@var.features) #Scaling only variable genes used in DR
+alt=low; rm(low)
+
+high = subset(rapasw2, idents = 'Hi')
+high = NormalizeData(high, normalization.method="LogNormalize",scale.factor=10000)
+high = FindVariableFeatures(object=high, mean.function=ExpMean, dispersion.function=LogVMR)
+high = ScaleData(high, features=high@assays[["RNA"]]@var.features) #Scaling only variable genes used in DR
+physio=high; rm(high)
+
+#Dotplot of top genes up and down with paclitaxel 
+rapa_top_genes = c(head(physio_rapa_downreg$gene, 10), head(physio_rapa_upreg$gene, 10))
+DotPlot(physio, features = rev(rapa_top_genes), group.by = "drug") + no_axes_titles()  + 
+  labs(size="Expression Fraction", color="Scaled Expression") +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5))  
+ggsave(file.path('020_figs', '006_prr-dotplot.tiff'), device='tiff')
+
+#Modules in physiologic response to paclitaxel (filtered)-----
+physio_rapa_response <- physio_rapa_response %>% filter(p_val_adj<0.05) %>% filter(abs(avg_log2FC)>log2(1.3))
+physio_rr_geneSet = rownames(physio_rapa_response)[physio_rapa_response$p_val_adj<0.05] #360 genes
+physio_rr_exprData = t(physio@assays[["RNA"]]@data[physio_rr_geneSet,]) #Use normalized data as input to WGCNA functions
+
+ClusterTOM <- function(datExpr, softPower){
+  #dev.off()
+  #Calclute the adjacency matrix
+  adj= adjacency(datExpr,type = "signed", power = softPower);
+  
+  #Turn adjacency matrix into a topological overlap matrix (TOM) to minimize the effects of noise and spurious associations
+  TOM=TOMsimilarityFromExpr(datExpr,networkType = "signed", TOMType = "signed", power = softPower, corType="bicor");
+  
+  colnames(TOM) = rownames(TOM) = colnames(datExpr)
+  dissTOM=1-TOM
+  
+  #Hierarchical clustering of the genes based on the TOM dissimilarity measure
+  geneTree = flashClust(as.dist(dissTOM),method="complete");
+  
+  #Plot the resulting clustering tree (dendrogram)
+  plot(geneTree, xlab="", sub="",cex=0.3);
+  
+  return(list(dissTOM = dissTOM, geneTree = geneTree))
+}
+
+physio_rrTOM = ClusterTOM(physio_rr_exprData, 6)
+
+CutTOMTree2 <- function(datExpr, dissTOM, geneTree, minModuleSize = 10, colorSeq=NULL){
+  #dev.off()
+  # Module identification using dynamic tree cut, you can also choose the hybrid method
+  dynamicMods = cutreeDynamic(dendro = geneTree,  method="tree", minClusterSize = minModuleSize);
+  #dynamicMods = cutreeDynamic(dendro = geneTree, distM = dissTOM, method="hybrid", deepSplit = 2, pamRespectsDendro = FALSE, minClusterSize = minModuleSize);
+  
+  #Get the module labels and the size of each module. Label 0 is reserved for unassigned genes
+  print(table(dynamicMods))
+  
+  #Plot the module assignment under the dendrogram; note: The grey color is reserved for unassigned genes
+  dynamicColors = labels2colors(dynamicMods, colorSeq = colorSeq)
+  table(dynamicColors)
+  plotDendroAndColors(geneTree, dynamicColors, "Dynamic Tree Cut", dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = "Gene dendrogram and module colors")
+  
+  #Set the diagonal of the dissimilarity to NA 
+  diag(dissTOM) = NA;
+  
+  #extract modules
+  module_colors= setdiff(unique(dynamicColors), "grey")
+  modules = lapply(module_colors, function(x){colnames(datExpr)[which(dynamicColors==x)]})
+  names(modules) = module_colors
+  return(list(dynamicColors = dynamicColors, modules = modules))
+}
+
+pdf(file=file.path('020_figs','007_phys-rr-moduledendro.pdf'),height=4, width=5)
+physio_rrTOMcut = CutTOMTree2(physio_rr_exprData, dissTOM = physio_rrTOM[['dissTOM']], geneTree = physio_rrTOM[['geneTree']], minModuleSize = 10)
+dev.off()
+
+#tests signifiance by comparing distribution of (dis)similarities against random modules (dis)similarities. Performs wilcox.test on each permutation,
+#logs the statistic and significance. Module is signifiant if 95%+ of tests are significant after multiple hypothesis correction.
+TestModuleSignificance <- function(mod, dissTOM, expr.data, n_perm = 10000, pval = 0.05, n.bin = 10){
+  require(Hmisc)
+  #vectorize the actual distribution of (dis)similarities, and remove zeros!
+  true.diss = as.vector(dissTOM[mod,mod])
+  true.diss = true.diss[-which(true.diss == 0)]
+  
+  #size of module for permutations
+  mod.size = length(mod)
+  
+  #bin all genes by expression
+  expr.avg = Matrix::rowMeans(expr.data) #ASK NB - Added Matrix:: to avoid overloading error
+  expr.avg = expr.avg[order(expr.avg)]
+  expr.avg.cut = as.numeric(x = cut2(x = expr.avg, m=round(length(expr.avg)/n.bin)))
+  names(expr.avg.cut) = names(expr.avg)
+  
+  #create a table of binnings of all genes and of our module genes
+  all.bin.table = table(expr.avg.cut)
+  mod.bin.table = table(expr.avg.cut[mod])
+  
+  #randomly generate module with same expression binning structure and run t.test and record results
+  test.results = data.frame(statistic = rep(NA, n_perm), pval = rep(NA, n_perm)) #container for results
+  
+  for (i in 1:n_perm){ #by permutation
+    random.mod = list() #create an empty list we will fill with gene names (each element will be gene names by bin)
+    
+    #for each bin of the mod bin table, randomly select that number of genes from the full set with that expression
+    for (j in 1:length(mod.bin.table)){ 
+      bin.genes = sample(names(expr.avg.cut)[which(expr.avg.cut == j)], mod.bin.table[j], replace = FALSE)
+      random.mod[[j]] = bin.genes #stick those genes into the random.mod list
+    }
+    #unlist and vectorize the distribution of (dis)similarities (remember to remove zeros)
+    random.mod = unlist(random.mod)
+    random.diss = as.vector(dissTOM[random.mod,random.mod])
+    random.diss = random.diss[-which(random.diss == 0)]
+    
+    #perform a wilcox.test and record the statistic and p-value.
+    #Note, IMPORTANT: here we perform the test asking if the true diss is LESS THAN the random diss, as we are trying to minimize dissimilarity
+    test = wilcox.test(x = true.diss, y = random.diss, alternative = "less")
+    test.results[i,] = c(test$statistic, test$p.value)
+  }
+  
+  #correct for multiple hypothesis testing, and then report the proportion of bad tests
+  test.results$FDR = p.adjust(test.results$pval)
+  num.failed.tests = sum(test.results$FDR > pval)
+  print(paste(paste(num.failed.tests, n_perm, sep="/"), "permutations failed the Mann-Whitney test.", sep=" "))
+  
+  #is the percentage of failed tests less than or equal to the p-val specified?
+  return(num.failed.tests/n_perm)
+}
+
+#Performs significance test for all modules in an object and writes results to file
+WriteModuleTests <- function(modules, dissTOM, expr.data, filename){
+  output=list()
+  pvals = vector("double", length=length(names(modules)))
+  for(i in 1:length(names(modules))){
+    m=names(modules)[i]
+    print(paste("Calculating p-value for", m, "module", sep=" "))
+    output[[m]] = data.frame('genes'=modules[[i]])
+    pvals[i] = TestModuleSignificance(modules[[i]], dissTOM, expr.data)
+  }
+  output[['Tests']] = data.frame('module'=names(modules),'pval'=pvals)
+  write_xlsx(output, filename)
+}
+
+#Try significance test on unmerged modules
+WriteModuleTests(modules=physio_rrTOMcut$modules,
+                 dissTOM = physio_rrTOM[['dissTOM']],
+                 expr.data=t(physio_rr_exprData),
+                 filename=file.path('020_analysis','filt_physio_rr_smallset_sp6_mm10_tests.xlsx'))
+
+#Modules in the altered response to paclitaxel (filtered)-----
+alt_rapa_response <- alt_rapa_response %>% filter(p_val_adj<0.05) %>% filter(abs(avg_log2FC)>log2(1.3))
+alt_rr_geneSet = rownames(alt_rapa_response)[alt_rapa_response$p_val_adj<0.05] #139 genes
+alt_rr_exprData = t(alt@assays[["RNA"]]@data[alt_rr_geneSet,]) #Use normalized data as input to WGCNA functions
+
+alt_rrTOM = ClusterTOM(alt_rr_exprData, 6)
+
+pdf(file=file.path('020_figs','008_alt-rr-moduledendro.pdf'),height=4, width=5)
+alt_rrTOMcut = CutTOMTree2(alt_rr_exprData, dissTOM = alt_rrTOM[['dissTOM']], geneTree = alt_rrTOM[['geneTree']], minModuleSize = 10) #colorseq removed
+dev.off()
+
+#Try significance test on unmerged modules
+WriteModuleTests(modules=alt_rrTOMcut$modules,
+                 dissTOM = alt_rrTOM[['dissTOM']],
+                 expr.data=t(alt_rr_exprData),
+                 filename=file.path('020_analysis','filt_alt_rr_smallset_sp6_mm10_tests.xlsx'))
+
+#Statistical test to determine if overlaps b/w alt and physio modules are significant (filtered)----
+
+#Read in modules
+path=file.path('020_analysis', 'filt_physio_rr_smallset_sp6_mm10_tests.xlsx')
+physio_rr_mods = lapply(excel_sheets(path), read_excel, path=path)
+physio_rr_tests = physio_rr_mods[[10]]   # CHANGED FROM 11 to 10 !!!!!!!!!!!!
+names(physio_rr_mods) = physio_rr_tests$module
+
+path=file.path('020_analysis', 'filt_alt_rr_smallset_sp6_mm10_tests.xlsx')
+alt_rr_mods = lapply(excel_sheets(path), read_excel, path=path)
+alt_rr_tests = alt_rr_mods[[4]]          # CHANGED FROM 7 to 4 !!!!!!!!!!!!
+names(alt_rr_mods) = alt_rr_tests$module
+
+#Define genomic universe -- union of pacli DE's from physio and alt
+rr_geneSet = union(physio_rr_geneSet, alt_rr_geneSet) #415 genes, call this 'universe' for Fisher's exact test
+
+#Significant modules
+physio_sig = physio_rr_tests$module[physio_rr_tests$pval<0.05]
+alt_sig = alt_rr_tests$module[alt_rr_tests$pval<0.05]
+
+#Fisher's exact test
+rr_mod_overlap_pvals = data.frame(matrix(nrow=length(physio_sig), ncol=length(alt_sig)))
+rownames(rr_mod_overlap_pvals) = physio_sig; colnames(rr_mod_overlap_pvals) = alt_sig
+
+n = length(rr_geneSet)
+for(i in physio_sig){
+  set1 = physio_rr_mods[[i]]$genes
+  for(j in alt_sig){
+    set2 = alt_rr_mods[[j]]$genes
+    x = fisher.test(matrix(c(n - length(union(set1,set2)), length(setdiff(set1,set2)), length(setdiff(set2,set1)), length(intersect(set1,set2))), nrow=2), 
+                    alternative = 'greater')
+    rr_mod_overlap_pvals[i,j] = x$p.value
+  }
+}
+
+#Save overlap pvals with color names
+write.csv(rr_mod_overlap_pvals, file.path('020_analysis', 'filt_rr_mod_overlap_pvals_colornames.csv')) #No MHC
+
+colnames(rr_mod_overlap_pvals) = plyr::mapvalues(colnames(rr_mod_overlap_pvals), from=c("turquoise", "blue", "brown"), to=c('M1','M2','M3'))
+colnames(rr_mod_overlap_pvals) = paste0('alt.', colnames(rr_mod_overlap_pvals))
+rownames(rr_mod_overlap_pvals) = plyr::mapvalues(rownames(rr_mod_overlap_pvals), from=c("yellow", "brown", "turquoise", "green", "red", "blue", "pink", "magenta"),
+                                                 to=paste0('M',1:8))
+rownames(rr_mod_overlap_pvals) = paste0('phys.', rownames(rr_mod_overlap_pvals))
+
+#Save overlap pvals with module names
+write.csv(rr_mod_overlap_pvals, file.path('020_analysis', 'filt_rr_mod_overlap_pvals.csv')) #No MHC
+
+#Scoring of RR modules by condition-----
+#Load data
+#rapasw2 = readRDS(file.path('data', 'rapasw2.rds'))
+
+#Read in modules
+#path=file.path('020_analysis', 'filt_physio_rr_smallset_sp6_mm10_tests.xlsx')
+#physio_rr_mods = lapply(excel_sheets(path), read_excel, path=path)
+#physio_rr_tests = physio_rr_mods[[13]]   # CHANGED FROM 11 to 13 !!!!!!!!!!!!
+#names(physio_rr_mods) = physio_rr_tests$module
+
+#path=file.path('020_analysis', 'filt_alt_rr_smallset_sp6_mm10_tests.xlsx')
+#alt_rr_mods = lapply(excel_sheets(path), read_excel, path=path)
+#alt_rr_tests = alt_rr_mods[[15]]          # CHANGED FROM 7 to 15 !!!!!!!!!!!!
+#names(alt_rr_mods) = alt_rr_tests$module
+
+#Function for computing new scores
+exprScore = function(seurat, geneList){
+  return(Matrix::colSums(expm1(seurat@assays[["RNA"]]@data[unlist(geneList),]))) #expm1 to return to #transcripts/10000
+}
+
+#Significant modules
+physio_sig_mods = physio_rr_mods[names(physio_rr_mods) %in% physio_sig]
+alt_sig_mods = alt_rr_mods[names(alt_rr_mods) %in% alt_sig]
+
+physio_sig_mods = physio_rr_mods[names(physio_rr_mods) %in% physio_sig]
+alt_sig_mods = alt_rr_mods[names(alt_rr_mods) %in% alt_sig]
+
+names(physio_sig_mods) = plyr::mapvalues(names(physio_sig_mods), 
+                                         from=c("yellow", "brown", "turquoise", "green", "red", "blue", "pink", "magenta"),
+                                         to=paste0('M',1:8))
+names(physio_sig_mods) = paste0('phys.', names(physio_sig_mods))
+
+names(alt_sig_mods) = plyr::mapvalues(names(alt_sig_mods),
+                                      from=c("turquoise", "blue", "brown"), 
+                                      to=c('M1','M2','M3'))
+names(alt_sig_mods) = paste0('alt.', names(alt_sig_mods))
+
+#Tabulate number of genes in each response and overlapping genes per module
+phys_mod_genes = unlist(physio_sig_mods) #219 genes
+alt_mod_genes = unlist(alt_sig_mods) #81 genes 
+both_mod_genes = intersect(phys_mod_genes, alt_mod_genes) #41 genes
+
+keep_common = function(x) { intersect(x$genes, both_mod_genes)}
+phys_mod_common = lapply(physio_sig_mods, keep_common)
+alt_mod_common = lapply(alt_sig_mods, keep_common)
+
+#Generate metadata object of expression scores for all modules, all cells
+modScores = data.frame(matrix(nrow=length(colnames(rapasw2@assays[["RNA"]]@data)), ncol=0))
+rownames(modScores) = colnames(rapasw2@assays[["RNA"]]@data)
+
+for(i in names(physio_sig_mods)){
+  modScores[,i] = exprScore(rapasw2, physio_sig_mods[[i]])
+}
+
+for(j in names(alt_sig_mods)){
+  modScores[,j] = exprScore(rapasw2, alt_sig_mods[[j]])
+}
+
+#Save modScores 
+write.csv(modScores, file=file.path('020_analysis', 'modScores.csv'))
+
+#WGCNA module comparisons p-values
+modScores$condition = rapasw2@meta.data$condition2
+pr = filter(modScores, condition=='Physio_PACLI')
+pc = filter(modScores, condition=='Physio_CTRL')
+ar = filter(modScores, condition=='Alt_PACLI')
+ac = filter(modScores, condition=='Alt_CTRL')
+
+modules = c(paste0('phys.M',1:8),paste0('alt.M',1:3))
+wgcna_mod_tests = data.frame(matrix(ncol=0, nrow=4))
+rownames(wgcna_mod_tests) = c('Phys','Alt','Ctrl','PACLI')
+for(i in modules){
+  phys = wilcox.test(x=pc[,i], y=pr[,i], alternative='two.sided')
+  alt = wilcox.test(x=ac[,i], y=ar[,i], alternative='two.sided')
+  ctrl = wilcox.test(x=pc[,i], y=ac[,i], alternative='two.sided')
+  pacli = wilcox.test(x=pr[,i], y=ar[,i], alternative='two.sided')
+  wgcna_mod_tests[,i] = c(phys$p.value, alt$p.value, ctrl$p.value, pacli$p.value)
+}
+
+write.csv(wgcna_mod_tests, file = file.path('020_analysis', 'wgcna_mod_tests.csv'))
+
+wgcna_mod_tests_bonferroni = wgcna_mod_tests*44
+write.csv(wgcna_mod_tests, file = file.path('020_analysis', 'wgcna_mod_tests_bonferroni.csv'))
+
+#Adjusted overlap p-value heatmap
+rr_mod_overlap_pvals$physmod = rownames(rr_mod_overlap_pvals)
+
+mopval_heatmap = melt(rr_mod_overlap_pvals, id.vars = 'physmod')
+mopval_heatmap$adj_pvalue = p.adjust(mopval_heatmap$value, method='BH') #B-H corrected p-value
+
+ggplot(mopval_heatmap, aes(variable, physmod)) + 
+  geom_tile(aes(fill=adj_pvalue)) +
+  scale_fill_gradient(low='steelblue', high='white', limits=c(0,1)) + 
+  geom_text(aes(label=signif(adj_pvalue,2)), color = 'black', size=2) +
+  ylab('Physiologic shear modules \nwith Paclitaxel') + 
+  xlab('Altered shear modules \nwith Paclitaxel') +
+  labs(fill="Adj P-value")+
+  theme_minimal()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),aspect.ratio=0.3) + 
+  coord_flip()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+                     axis.text = element_text(colour="black"))
+ggsave(filename = file.path('020_figs','009_mod-overlap-pval.pdf'), device='pdf',scale = 0.8)
+
+#Set up module scores as metadata along with condition variable for plotting
+rapasw2 = AddMetaData(rapasw2, modScores)
+
+#Scaled WGCNA mod scores heatmap by condition
+scaledModScores = as.data.frame(scale(data.matrix(modScores)))
+scaledModScores$condition = rapasw2@meta.data$condition2
+scaledModMeans = scaledModScores %>% group_by(condition) %>% summarize_all('mean')
+
+#Determine order for plotting with dendrogram
+smm = scaledModMeans[,2:12]
+rownames(smm) = scaledModMeans$condition
+smm=t(smm)
+dd =dist(smm, method='euclidean')
+hc = hclust(dd)
+plot(hc)
+scaledModMeans = scaledModMeans[, c('phys.M7', 'phys.M2', 'phys.M3', 'phys.M1', 'phys.M5', 'phys.M4', 'phys.M6', 'phys.M8',
+                                    'alt.M2', 'alt.M3', 'alt.M1', 'condition')]
+#Make heatmap 
+scaledModMeans = melt(scaledModMeans)
+scaledModMeans$condition = factor(scaledModMeans$condition, levels=c('Physio_CTRL', 'Physio_PACLI', 'Alt_CTRL' ,'Alt_PACLI'))
+scaledModMeans$type = ifelse(grepl('phys', scaledModMeans$variable), 'phys', 'alt')
+
+scaledModMeans$condition = ifelse(grepl("Physio_CTRL", scaledModMeans$condition), "Ctrl_Physio",
+                                  ifelse(grepl("Physio_PACLI", scaledModMeans$condition), "Pacli_Physio",
+                                         ifelse(grepl("Alt_CTRL", scaledModMeans$condition), "Ctrl_Alt","Pacli_Alt")))
+
+scaledModMeans$condition = factor(scaledModMeans$condition, levels=c('Ctrl_Physio', 'Pacli_Physio', 'Ctrl_Alt' ,'Pacli_Alt'))
+
+
+ggplot(scaledModMeans, aes(x = scaledModMeans$condition, y=scaledModMeans$variable)) + 
+  facet_grid(scales='free') +
+  geom_tile(aes(fill = scaledModMeans$value)) + 
+  scale_fill_gradientn(colors = colorRampPalette(rev(brewer.pal(n=7, name='RdBu')))(100), limits=c(-1.2,1.2))+
+  labs(x='Condition', y='Module', fill='Scaled Score') +
+  theme(strip.text.y=element_blank(), strip.background = element_blank())+theme_minimal()+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),aspect.ratio=0.3)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.text = element_text(colour="black"))+coord_flip()+scale_x_discrete(limits=rev)
+ggsave(file.path('020_figs', '010_RR-mod-mean-scaled_Heatmap.pdf'), device='pdf',scale = 0.8)
+
+#Absolute values heatmap
+modMeans = modScores %>% group_by(condition) %>% summarize_all('mean')
+modMeans = modMeans[, c('phys.M7', 'phys.M2', 'phys.M3', 'phys.M1', 'phys.M5', 'phys.M4', 'phys.M6', 'phys.M8',
+                        'alt.M2', 'alt.M3', 'alt.M1', 'condition')]
+
+#Make heatmap
+modMeans = melt(modMeans)
+modMeans$condition = factor(modMeans$condition, levels=c('Physio_CTRL', 'Physio_PACLI', 'Alt_CTRL' ,'Alt_PACLI'))
+modMeans$type = ifelse(grepl('phys', modMeans$variable), 'phys', 'alt')
+ggplot(modMeans, aes(x = modMeans$condition, y=modMeans$variable)) + 
+  facet_grid(rows = vars(type), scales='free') +
+  geom_tile(aes(fill = modMeans$value)) + 
+  scale_fill_gradientn(colors = colorRampPalette(brewer.pal(n=9, name='Blues'))(100))+
+  labs(x='Condition', y='Module', fill='Abs Score') +
+  theme(strip.text.y=element_blank(), strip.background = element_blank())
+ggsave(file.path('020_figs', '011_RR-mod-mean-abs_Heatmap.pdf'), device='pdf')
+
+#RR mod scores violin plots
+#Function to apply theme to individual violin plots
+VlnPlot_2 <- function(object, features.plot, group.by, colors, ncol) {
+  
+  # Main function
+  main_function <- function(object = object, features.plot = features.plot, group.by=group.by, colors=colors) {
+    VlnPlot(object = object, features = features.plot, group.by=group.by, cols=colors, pt.size=-1) + 
+      labs(x = element_blank()) +
+      no_legend() +
+      no_axes_titles() +
+      rotate_x_text(90)
+  }
+  
+  # Apply main function on all features
+  p <- lapply(X = features.plot, object = object, group.by=group.by, colors=colors,
+              FUN = main_function)
+  
+  # Arrange all plots using cowplot
+  # Adapted from Seurat
+  # https://github.com/satijalab/seurat/blob/master/R/plotting.R#L1100
+  # ncol argument adapted from Josh O'Brien
+  # https://stackoverflow.com/questions/10706753/how-do-i-arrange-a-variable-list-of-plots-using-grid-arrange
+  cowplot::plot_grid(plotlist = p, ncol = ncol)
+}
+
+Shear_Pacli_col <- c(RColorBrewer::brewer.pal(11, "RdBu")[10],RColorBrewer::brewer.pal(11, "RdBu")[2],
+                     RColorBrewer::brewer.pal(9, "Set1")[5],c(RColorBrewer::brewer.pal(9, "Paired")[9]))
+
+
+pdf(file=file.path('020_figs','012_Phys-RR-mod_Violins.pdf'))
+VlnPlot_2(rapasw2, features.plot=paste0('phys.M',1:6), group.by='condition2', colors=c(Shear_Pacli_col[3],
+                                                                                       Shear_Pacli_col[4],
+                                                                                       Shear_Pacli_col[1],
+                                                                                       Shear_Pacli_col[2]), ncol=3)
+dev.off()
+
+pdf(file=file.path('020_figs','013_Phys-RR-mod_Violins.pdf'))
+VlnPlot_2(rapasw2, features.plot=c(paste0('phys.M',7:8),paste0('phys.M',7:8)), group.by='condition2', colors=c(Shear_Pacli_col[3],
+                                                                                                               Shear_Pacli_col[4],
+                                                                                                               Shear_Pacli_col[1],
+                                                                                                               Shear_Pacli_col[2]), ncol=3)
+dev.off()
+
+pdf(file=file.path('020_figs','015_Alt-RR-mod_Violins.pdf'))
+VlnPlot_2(rapasw2, features.plot=c(paste0('alt.M',1:3),"alt.M3"), group.by='condition2', colors=c(Shear_Pacli_col[3],
+                                                                                                  Shear_Pacli_col[4],
+                                                                                                  Shear_Pacli_col[1],
+                                                                                                  Shear_Pacli_col[2]), ncol=3)
+dev.off()
+
